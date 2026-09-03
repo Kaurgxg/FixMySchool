@@ -1,5 +1,13 @@
 require("dotenv").config();
 
+const dns = require("dns");
+
+// Keep this if your MongoDB Atlas SRV connection needs it.
+dns.setServers([
+  "8.8.8.8",
+  "8.8.4.4",
+]);
+
 const express = require("express");
 const cors = require("cors");
 
@@ -33,6 +41,31 @@ app.use(
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// --- Database connection ---
+let dbReady;
+
+async function ensureDB() {
+  if (!dbReady) {
+    dbReady = connectDB().then(() => ensureDefaultAdmin());
+  }
+
+  return dbReady;
+}
+
+// IMPORTANT: Database middleware must come BEFORE routes.
+app.use(async (req, res, next) => {
+  try {
+    await ensureDB();
+    next();
+  } catch (err) {
+    console.error("Database connection failed:", err);
+
+    res.status(500).json({
+      message: "Database connection failed.",
+    });
+  }
+});
+
 // --- Routes ---
 app.use("/uploads", uploadRoutes);
 
@@ -49,31 +82,8 @@ app.use("/api/notifications", notificationRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/admin", adminRoutes);
 
+// --- Error handling ---
 app.use(notFound);
 app.use(errorHandler);
-
-// --- Database connection ---
-let dbReady;
-
-async function ensureDB() {
-  if (!dbReady) {
-    dbReady = connectDB().then(() => ensureDefaultAdmin());
-  }
-
-  return dbReady;
-}
-
-// Connect before handling API requests.
-app.use(async (req, res, next) => {
-  try {
-    await ensureDB();
-    next();
-  } catch (err) {
-    console.error("Database connection failed:", err);
-    res.status(500).json({
-      message: "Database connection failed.",
-    });
-  }
-});
 
 module.exports = app;
