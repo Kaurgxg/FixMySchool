@@ -1,23 +1,10 @@
 require("dotenv").config();
 
-const dns = require("dns");
-
-// Force Node.js to use Google DNS.
-// This fixes MongoDB Atlas SRV lookup errors such as:
-// querySrv ECONNREFUSED _mongodb._tcp....
-dns.setServers([
-  "8.8.8.8",
-  "8.8.4.4",
-]);
-
 const express = require("express");
 const cors = require("cors");
-const cron = require("node-cron");
 
 const connectDB = require("./config/db");
 const ensureDefaultAdmin = require("./utils/ensureDefaultAdmin");
-const { runReminderSweep } = require("./utils/reminderJob");
-const { acquireDailyLock } = require("./models/CronLock");
 const { notFound, errorHandler } = require("./middleware/errorHandler");
 
 const authRoutes = require("./routes/authRoutes");
@@ -46,10 +33,9 @@ app.use(
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Serve uploaded issue photos/videos only to authorized users.
+// --- Routes ---
 app.use("/uploads", uploadRoutes);
 
-// --- Health check ---
 app.get("/api/health", (req, res) => {
   res.json({
     status: "ok",
@@ -57,52 +43,37 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-// --- Routes ---
 app.use("/api/auth", authRoutes);
 app.use("/api/issues", issueRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/admin", adminRoutes);
 
-// --- Error handling ---
 app.use(notFound);
 app.use(errorHandler);
 
-const PORT = process.env.PORT || 5000;
+// --- Database connection ---
+let dbReady;
 
-async function start() {
-  await connectDB();
-  await ensureDefaultAdmin();
+async function ensureDB() {
+  if (!dbReady) {
+    dbReady = connectDB().then(() => ensureDefaultAdmin());
+  }
 
-  // Run reminder sweep every day at 08:00 server time.
-  cron.schedule("0 8 * * *", async () => {
-    try {
-      const acquired = await acquireDailyLock("reminderSweep");
-
-      if (!acquired) {
-        console.log(
-          "Reminder sweep already run by another instance today - skipping."
-        );
-        return;
-      }
-
-      const result = await runReminderSweep();
-
-      console.log(
-        `Reminder sweep: checked ${result.checked}, sent ${result.remindersSent}.`
-      );
-    } catch (err) {
-      console.error("Reminder sweep failed:", err.message);
-    }
-  });
-
-  app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
+  return dbReady;
 }
+
+// Connect before handling API requests.
+app.use(async (req, res, next) => {
+  try {
+    await ensureDB();
+    next();
+  } catch (err) {
+    console.error("Database connection failed:", err);
+    res.status(500).json({
+      message: "Database connection failed.",
+    });
+  }
+});
 
 module.exports = app;
-
-if (require.main === module) {
-  start();
-}
