@@ -101,6 +101,8 @@ async function start() {
   });
 }
 
-start();
-
 module.exports = app;
+
+if (require.main === module) {
+  start();
+}
